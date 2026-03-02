@@ -1,0 +1,7 @@
+services:
+  mail_autoresponder:
+    build: .
+    env_file: .env
+    volumes:
+      - .:/app
+    restart: unless-stopped

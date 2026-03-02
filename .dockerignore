@@ -1,0 +1,9 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+test_mails
+README.md
+Dockerfile
+.dockerignore
+docker-compose.yml

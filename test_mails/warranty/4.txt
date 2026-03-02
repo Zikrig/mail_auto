@@ -1,0 +1,23 @@
+
+-------- Пересылаемое сообщение --------
+От кого: noreply@tilda.ws <noreply@tilda.ws>
+Кому: ukataka_warranty@mail.ru
+Дата: Пятница, 13 февраля 2026, 19:01 +03:00
+Тема: Request from [ukataka.ru]
+ 
+ 
+Request details:
+
+Name: Иван
+Email: boss.efek@mail.ru
+Согласие_с_офертой: yes
+Согласие_на_обработку_данных: yes
+Согласие_на_рекламу: yes
+
+
+ 
+Additional information:
+
+Sent from the page: https://ukataka.ru/garantiya
+Block ID: rec1909872211
+Request ID: 21128536:8167049853
