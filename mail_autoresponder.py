@@ -173,6 +173,7 @@ def save_processed_id(msg_id: str):
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
     """Отправка письма через Yandex SMTP."""
+    print(f"[SMTP] Отправка письма: from={login} to={to} subject={subject}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
     msg["From"] = login
@@ -181,10 +182,15 @@ def send_email(login: str, password: str, to: str, subject: str, body: str, repl
         msg["In-Reply-To"] = reply_to_msg_id
         msg["References"] = reply_to_msg_id
     msg.attach(MIMEText(body, "plain", "utf-8"))
-    with smtplib.SMTP("smtp.yandex.ru", 587) as smtp:
-        smtp.starttls()
-        smtp.login(login, password)
-        smtp.sendmail(login, [to], msg.as_string())
+    try:
+        with smtplib.SMTP("smtp.yandex.ru", 587) as smtp:
+            smtp.starttls()
+            smtp.login(login, password)
+            smtp.sendmail(login, [to], msg.as_string())
+        print(f"[SMTP] Успешно отправлено на {to}")
+    except Exception as e:
+        print(f"[SMTP] Ошибка при отправке на {to}: {e}")
+        raise
 
 
 def read_templates():
@@ -205,7 +211,9 @@ def process_care_mail(msg, parsed: dict, templates: dict, sheet_warranty, care_l
     nomer = parsed.get("Номер_чека") or parsed.get("Номер_чека_и_дата") or ""
     client_email = get_client_email(parsed)
     if not client_email:
+        print("[CARE] Пропуск письма: не найден email клиента в parsed =", parsed)
         return
+    print(f"[CARE] Обработка обращения: email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}")
     found = find_in_sheet(sheet_warranty, art or "", nomer or None)
     subject_reply = "Re: Ваше обращение [ukataka.ru]"
     if found:
@@ -214,6 +222,7 @@ def process_care_mail(msg, parsed: dict, templates: dict, sheet_warranty, care_l
     else:
         body_reply = templates["care_response_not_found"]
         admin_body = templates["care_admin_not_found"]
+    print(f"[CARE] Результат поиска в таблице гарантии: found={found}")
     send_email(care_login, care_password, client_email, subject_reply, body_reply, msg.get("Message-ID"))
     if admin_email:
         send_email(care_login, care_password, admin_email, "[Обращение] Данные в гарантии: " + ("найдены" if found else "не найдены"), admin_body)
@@ -225,22 +234,28 @@ def process_registration_mail(msg, parsed: dict, templates: dict, sheet_reg, war
     nomer = parsed.get("Номер_чека")
     client_email = get_client_email(parsed)
     if not client_email:
+        print("[REG] Пропуск письма: не найден email клиента в parsed =", parsed)
         return
+    print(f"[REG] Обработка регистрации: email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}")
     already = find_in_sheet(sheet_reg, art or "", nomer or None)
     subject_reply = "Re: Регистрация гарантии [ukataka.ru]"
     body_reply = templates["reg_response_repeat"] if already else templates["reg_response_first"]
+    print(f"[REG] Результат поиска в таблице регистрации: already={already}")
     send_email(warranty_login, warranty_password, client_email, subject_reply, body_reply, msg.get("Message-ID"))
 
 
 def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg, templates: dict, config: dict):
     """Выборка писем из папки INBOX и обработка."""
+    print(f"[IMAP] Проверка ящика {mailbox_name!r}")
     imap.select("INBOX")
     _, data = imap.search(None, "UNSEEN")
     if not data or not data[0]:
+        print(f"[IMAP] Новых (UNSEEN) писем нет в ящике {mailbox_name!r}")
         return
     processed = load_processed_ids()
     for uid in data[0].split():
         uid = uid.decode() if isinstance(uid, bytes) else uid
+        print(f"[IMAP] Обработка UID={uid} из ящика {mailbox_name!r}")
         _, msg_data = imap.fetch(uid, "(RFC822)")
         for part in msg_data:
             if isinstance(part, tuple):
@@ -248,10 +263,15 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
             else:
                 continue
             msg_id = msg.get("Message-ID", "")
+            subject = msg.get("Subject", "")
+            print(f"[IMAP] Message-ID={msg_id!r}, Subject={subject!r}")
             if msg_id in processed:
+                print(f"[IMAP] Письмо уже обработано ранее (Message-ID в processed_ids.txt), пропуск.")
                 continue
             letter_type, parsed = detect_type_and_extract(msg, mailbox_name)
+            print(f"[IMAP] Определён тип письма: {letter_type!r}, parsed_keys={list(parsed.keys())}")
             if not letter_type:
+                print("[IMAP] Не удалось определить тип письма, пропуск.")
                 continue
             if mailbox_name == "care" and letter_type == "care":
                 process_care_mail(
@@ -266,7 +286,12 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
                     sheet_reg,
                     config["warranty_login"], config["warranty_password"],
                 )
-            save_processed_id(msg_id)
+            else:
+                print(f"[IMAP] Тип письма {letter_type!r} не подходит для ящика {mailbox_name!r}, пропуск.")
+                continue
+            if msg_id:
+                save_processed_id(msg_id)
+                print(f"[IMAP] Message-ID={msg_id!r} записан в processed_ids.txt")
 
 
 def main():
