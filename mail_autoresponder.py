@@ -155,12 +155,16 @@ def _row_matches(row: dict, art: str, nomer_cheka: Optional[str]) -> bool:
 
 def get_client_email(parsed: dict) -> str:
     """Email клиента для ответа."""
-    return (
+    raw = (
         parsed.get("ma_email")
         or parsed.get("Email")
         or parsed.get("email")
         or ""
-    ).strip()
+    )
+    email_str = str(raw).strip()
+    # Иногда из HTML-писем прилетает хвост вида "<br>" и прочие теги
+    email_str = re.sub(r"<[^>]+>", "", email_str)
+    return email_str.strip()
 
 
 def _get_last_uid_file(mailbox_name: str) -> Path:
