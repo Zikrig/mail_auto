@@ -292,45 +292,51 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
         return
 
     max_processed = last_uid
-    for uid_int in to_process:
-        uid = str(uid_int)
-        status, msg_data = imap.fetch(uid, "(RFC822)")
-        if status != "OK":
-            print(f"[IMAP] UID={uid}: ошибка fetch: {status}")
-            continue
-        for part in msg_data:
-            if not isinstance(part, tuple):
+    try:
+        for uid_int in to_process:
+            uid = str(uid_int)
+            status, msg_data = imap.fetch(uid, "(RFC822)")
+            if status != "OK":
+                print(f"[IMAP] UID={uid}: ошибка fetch: {status}")
+                max_processed = max(max_processed, uid_int)
                 continue
-            msg = email.message_from_bytes(part[1])
-            subject = msg.get("Subject", "")
-            print(f"[IMAP] Обработка UID={uid}, Subject={subject!r}")
-            letter_type, parsed = detect_type_and_extract(msg, mailbox_name)
-            print(f"[IMAP] Тип письма: {letter_type!r}, parsed_keys={list(parsed.keys())}")
-            if not letter_type:
-                print("[IMAP] Не удалось определить тип письма, пропуск.")
-                continue
-            if mailbox_name == "care" and letter_type == "care":
-                process_care_mail(
-                    msg, parsed, templates,
-                    sheet_warranty,
-                    config["care_login"], config["care_password"],
-                    config["admin_email"],
-                )
-            elif mailbox_name == "warranty" and letter_type == "registration":
-                process_registration_mail(
-                    msg, parsed, templates,
-                    sheet_reg,
-                    config["warranty_login"], config["warranty_password"],
-                    config["admin_email"],
-                )
-            else:
-                print(f"[IMAP] Тип {letter_type!r} не подходит для ящика {mailbox_name!r}, пропуск.")
-                continue
-            max_processed = max(max_processed, uid_int)
-
-    if max_processed > last_uid:
-        save_last_uid(mailbox_name, max_processed)
-        print(f"[IMAP] Для ящика {mailbox_name!r} сохранён последний UID: {max_processed}")
+            for part in msg_data:
+                if not isinstance(part, tuple):
+                    continue
+                msg = email.message_from_bytes(part[1])
+                subject = msg.get("Subject", "")
+                print(f"[IMAP] Обработка UID={uid}, Subject={subject!r}")
+                try:
+                    letter_type, parsed = detect_type_and_extract(msg, mailbox_name)
+                    print(f"[IMAP] Тип письма: {letter_type!r}, parsed_keys={list(parsed.keys())}")
+                    if not letter_type:
+                        print("[IMAP] Не удалось определить тип письма, пропуск.")
+                        break
+                    if mailbox_name == "care" and letter_type == "care":
+                        process_care_mail(
+                            msg, parsed, templates,
+                            sheet_warranty,
+                            config["care_login"], config["care_password"],
+                            config["admin_email"],
+                        )
+                    elif mailbox_name == "warranty" and letter_type == "registration":
+                        process_registration_mail(
+                            msg, parsed, templates,
+                            sheet_reg,
+                            config["warranty_login"], config["warranty_password"],
+                            config["admin_email"],
+                        )
+                    else:
+                        print(f"[IMAP] Тип {letter_type!r} не подходит для ящика {mailbox_name!r}, пропуск.")
+                except Exception as e:
+                    print(f"[IMAP] Ошибка обработки UID={uid} в ящике {mailbox_name!r}: {e}")
+                finally:
+                    max_processed = max(max_processed, uid_int)
+                break
+    finally:
+        if max_processed > last_uid:
+            save_last_uid(mailbox_name, max_processed)
+            print(f"[IMAP] Для ящика {mailbox_name!r} сохранён последний UID: {max_processed}")
 
 
 def main():
