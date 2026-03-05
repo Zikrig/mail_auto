@@ -12,9 +12,7 @@ import smtplib
 import email
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import parsedate_to_datetime
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
 from dotenv import load_dotenv
@@ -25,8 +23,9 @@ load_dotenv()
 
 # Каталог с черновиками ответов
 DATA_DIR = Path(__file__).resolve().parent / "data"
-# Время последней проверки (с точностью до секунды), письма раньше не обрабатываем
-LAST_CHECK_FILE = Path(__file__).resolve().parent / "last_check.txt"
+# Файлы с последним обработанным UID по ящикам (чтобы не отвечать дважды)
+LAST_UID_CARE_FILE = Path(__file__).resolve().parent / "last_uid_care.txt"
+LAST_UID_WARRANTY_FILE = Path(__file__).resolve().parent / "last_uid_warranty.txt"
 
 # Google Sheets scope
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive.readonly"]
@@ -162,25 +161,27 @@ def get_client_email(parsed: dict) -> str:
     ).strip()
 
 
-def load_last_check_time() -> datetime:
-    """Время последней проверки (UTC). Если файла нет — «сутки назад»."""
-    if not LAST_CHECK_FILE.exists():
-        return datetime.now(timezone.utc) - timedelta(days=1)
+def _get_last_uid_file(mailbox_name: str) -> Path:
+    return LAST_UID_CARE_FILE if mailbox_name == "care" else LAST_UID_WARRANTY_FILE
+
+
+def load_last_uid(mailbox_name: str) -> int:
+    """
+    Последний обработанный UID для ящика.
+    Если файла нет или сломан — считаем 0 (обрабатываем все письма).
+    """
+    path = _get_last_uid_file(mailbox_name)
+    if not path.exists():
+        return 0
     try:
-        s = LAST_CHECK_FILE.read_text(encoding="utf-8").strip()
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
+        return int(path.read_text(encoding="utf-8").strip() or "0")
     except Exception:
-        return datetime.now(timezone.utc) - timedelta(days=1)
+        return 0
 
 
-def save_last_check_time(dt: datetime):
-    """Сохранить время проверки (ожидается UTC)."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    LAST_CHECK_FILE.write_text(dt.isoformat(), encoding="utf-8")
+def save_last_uid(mailbox_name: str, uid: int):
+    path = _get_last_uid_file(mailbox_name)
+    path.write_text(str(uid), encoding="utf-8")
 
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
@@ -261,51 +262,48 @@ def process_registration_mail(msg, parsed: dict, templates: dict, sheet_reg, war
         send_email(warranty_login, warranty_password, admin_email, "[Регистрация] " + ("повторная" if already else "новая") + " [ukataka.ru]", admin_body)
 
 
-def _message_datetime(msg) -> Optional[datetime]:
-    """Дата/время письма по заголовку Date (UTC для сравнения)."""
-    raw = msg.get("Date")
-    if not raw:
-        return None
-    try:
-        dt = parsedate_to_datetime(raw)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        else:
-            dt = dt.astimezone(timezone.utc)
-        return dt
-    except Exception:
-        return None
-
-
-def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg, templates: dict, config: dict, last_check: datetime):
-    """Выборка писем из INBOX, полученных после last_check (UTC)."""
-    print(f"[IMAP] Проверка ящика {mailbox_name!r}, письма после {last_check.isoformat()}")
+def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg, templates: dict, config: dict):
+    """
+    Выборка писем из INBOX, UID которых больше последнего обработанного.
+    Это устойчиво к расхождению часов (ориентируемся только на UID).
+    """
+    print(f"[IMAP] Проверка ящика {mailbox_name!r}")
     imap.select("INBOX")
-    since_str = last_check.strftime("%d-%b-%Y")
-    try:
-        _, data = imap.search(None, "SINCE " + since_str)
-    except Exception as e:
-        print(f"[IMAP] Ошибка поиска SINCE: {e}")
+    status, data = imap.search(None, "ALL")
+    if status != "OK" or not data or not data[0]:
+        print(f"[IMAP] В ящике {mailbox_name!r} нет писем.")
         return
-    if not data or not data[0]:
-        print(f"[IMAP] Писем с SINCE {since_str} нет в ящике {mailbox_name!r}")
+
+    last_uid = load_last_uid(mailbox_name)
+    print(f"[IMAP] Последний обработанный UID для {mailbox_name!r}: {last_uid}")
+
+    uids_bytes = data[0].split()
+    uids_int = []
+    for u in uids_bytes:
+        try:
+            uids_int.append(int(u))
+        except ValueError:
+            continue
+    uids_int.sort()
+
+    to_process = [u for u in uids_int if u > last_uid]
+    if not to_process:
+        print(f"[IMAP] Новых писем (UID > {last_uid}) нет в ящике {mailbox_name!r}.")
         return
-    for uid in data[0].split():
-        uid = uid.decode() if isinstance(uid, bytes) else uid
-        _, msg_data = imap.fetch(uid, "(RFC822)")
+
+    max_processed = last_uid
+    for uid_int in to_process:
+        uid = str(uid_int)
+        status, msg_data = imap.fetch(uid, "(RFC822)")
+        if status != "OK":
+            print(f"[IMAP] UID={uid}: ошибка fetch: {status}")
+            continue
         for part in msg_data:
             if not isinstance(part, tuple):
                 continue
             msg = email.message_from_bytes(part[1])
-            msg_dt = _message_datetime(msg)
-            if msg_dt is None:
-                print(f"[IMAP] UID={uid}: нет даты в письме, пропуск.")
-                continue
-            if msg_dt <= last_check:
-                print(f"[IMAP] UID={uid}: дата {msg_dt.isoformat()} <= last_check, пропуск.")
-                continue
             subject = msg.get("Subject", "")
-            print(f"[IMAP] Обработка UID={uid}, дата={msg_dt.isoformat()}, Subject={subject!r}")
+            print(f"[IMAP] Обработка UID={uid}, Subject={subject!r}")
             letter_type, parsed = detect_type_and_extract(msg, mailbox_name)
             print(f"[IMAP] Тип письма: {letter_type!r}, parsed_keys={list(parsed.keys())}")
             if not letter_type:
@@ -327,6 +325,12 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
                 )
             else:
                 print(f"[IMAP] Тип {letter_type!r} не подходит для ящика {mailbox_name!r}, пропуск.")
+                continue
+            max_processed = max(max_processed, uid_int)
+
+    if max_processed > last_uid:
+        save_last_uid(mailbox_name, max_processed)
+        print(f"[IMAP] Для ящика {mailbox_name!r} сохранён последний UID: {max_processed}")
 
 
 def main():
@@ -360,14 +364,11 @@ def main():
         "admin_email": admin_email,
     }
 
-    last_check = load_last_check_time()
-    print(f"[RUN] Время последней проверки: {last_check.isoformat()}")
-
     # Ящик обращений (care)
     try:
         imap_care = imaplib.IMAP4_SSL("imap.yandex.ru")
         imap_care.login(care_login, care_password)
-        fetch_and_process_mailbox(imap_care, "care", sheet_warranty, sheet_reg, templates, config, last_check)
+        fetch_and_process_mailbox(imap_care, "care", sheet_warranty, sheet_reg, templates, config)
         imap_care.logout()
     except Exception as e:
         print("Ошибка при обработке ящика care:", e)
@@ -376,14 +377,10 @@ def main():
     try:
         imap_warranty = imaplib.IMAP4_SSL("imap.yandex.ru")
         imap_warranty.login(warranty_login, warranty_password)
-        fetch_and_process_mailbox(imap_warranty, "warranty", sheet_warranty, sheet_reg, templates, config, last_check)
+        fetch_and_process_mailbox(imap_warranty, "warranty", sheet_warranty, sheet_reg, templates, config)
         imap_warranty.logout()
     except Exception as e:
         print("Ошибка при обработке ящика warranty:", e)
-
-    now_utc = datetime.now(timezone.utc)
-    save_last_check_time(now_utc)
-    print(f"[RUN] Время проверки обновлено: {now_utc.isoformat()}")
 
 
 if __name__ == "__main__":
