@@ -10,6 +10,8 @@ import re
 import imaplib
 import smtplib
 import email
+import time
+from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
@@ -339,7 +341,7 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
             print(f"[IMAP] Для ящика {mailbox_name!r} сохранён последний UID: {max_processed}")
 
 
-def main():
+def run_iteration():
     care_login = os.getenv("MAIL_USER_CARE", "").strip()
     care_password = os.getenv("MAIL_PASSWORD_CARE", "").strip()
     warranty_login = os.getenv("MAIL_USER_WARRANTY", "").strip()
@@ -387,6 +389,25 @@ def main():
         imap_warranty.logout()
     except Exception as e:
         print("Ошибка при обработке ящика warranty:", e)
+
+
+def main():
+    interval_seconds = 120
+    print("Автоответчик запущен. Основной цикл в Python, проверка почты каждые 2 минуты.")
+    while True:
+        start = datetime.now()
+        print(f"[MAIN] Запуск проверки в {start.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        try:
+            run_iteration()
+        except Exception as e:
+            print(f"[MAIN] Необработанная ошибка во время цикла: {e}")
+        next_time = datetime.now() + timedelta(seconds=interval_seconds)
+        print(f"[MAIN] Следующий запуск в {next_time.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+        try:
+            time.sleep(interval_seconds)
+        except KeyboardInterrupt:
+            print("[MAIN] Получен KeyboardInterrupt, остановка автоответчика.")
+            break
 
 
 if __name__ == "__main__":
