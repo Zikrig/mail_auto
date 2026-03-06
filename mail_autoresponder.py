@@ -53,8 +53,9 @@ def strip_html(text: str) -> str:
 def normalize_email(addr: str) -> str:
     """Готовит email для отправки и поиска: убирает HTML-теги и все пробелы."""
     s = str(addr or "")
-    s = re.sub(r"<[^>]+>", "", s)   # убрать <br>, <span> и любые теги
+    # s = re.sub(r"<[^>]+>", "", s)   # убрать <br>, <span> и любые теги
     s = re.sub(r"\s+", "", s)         # убрать все пробелы, переносы, табы
+    s = s.replace('br','')
     return s.strip()
 
 
