@@ -202,7 +202,8 @@ def save_last_uid(mailbox_name: str, uid: int):
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
     """Отправка письма через Yandex SMTP."""
-    login = login.replace('<br>', '')
+    login = normalize_email(login)
+    to = normalize_email(to)
     print(f"[SMTP] Отправка письма: from={login} to={to} subject={subject}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
@@ -357,13 +358,13 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
 
 
 def run_iteration():
-    care_login = os.getenv("MAIL_USER_CARE", "").strip()
+    care_login = normalize_email(os.getenv("MAIL_USER_CARE", ""))
     care_password = os.getenv("MAIL_PASSWORD_CARE", "").strip()
-    warranty_login = os.getenv("MAIL_USER_WARRANTY", "").strip()
+    warranty_login = normalize_email(os.getenv("MAIL_USER_WARRANTY", ""))
     warranty_password = os.getenv("MAIL_PASSWORD_WARRANTY", "").strip()
     table_warranty_id = os.getenv("TABLE_WARRANTY", "").strip()
     table_reg_id = os.getenv("TABLE_REG", "").strip()
-    admin_email = os.getenv("ADMIN_EMAIL", "").strip()
+    admin_email = normalize_email(os.getenv("ADMIN_EMAIL", ""))
 
     if not table_warranty_id or not table_reg_id:
         print("Укажите TABLE_WARRANTY и TABLE_REG в .env (ID таблиц Google Sheets).")
