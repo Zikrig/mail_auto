@@ -50,6 +50,14 @@ def strip_html(text: str) -> str:
     return re.sub(r"<[^>]+>", "", str(text or "")).strip()
 
 
+def normalize_email(addr: str) -> str:
+    """Готовит email для отправки и поиска: убирает HTML-теги и все пробелы."""
+    s = str(addr or "")
+    s = re.sub(r"<[^>]+>", "", s)   # убрать <br>, <span> и любые теги
+    s = re.sub(r"\s+", "", s)         # убрать все пробелы, переносы, табы
+    return s.strip()
+
+
 def parse_key_value_body(text: str) -> dict:
     """Из тела письма извлекает пары вида «Ключ: значение» (в т.ч. с подчёркиванием)."""
     result = {}
@@ -159,14 +167,14 @@ def _row_matches(row: dict, art: str, nomer_cheka: Optional[str]) -> bool:
 
 
 def get_client_email(parsed: dict) -> str:
-    """Email клиента для ответа (уже без HTML-тегов, т.к. чистим при разборе и здесь)."""
+    """Email клиента для ответа и поиска: без тегов и пробелов."""
     raw = (
         parsed.get("ma_email")
         or parsed.get("Email")
         or parsed.get("email")
         or ""
     )
-    return strip_html(raw)
+    return normalize_email(raw)
 
 
 def _get_last_uid_file(mailbox_name: str) -> Path:
@@ -194,7 +202,6 @@ def save_last_uid(mailbox_name: str, uid: int):
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
     """Отправка письма через Yandex SMTP."""
-    to = strip_html(to).strip() or to  # гарантированно чистим адрес от HTML перед отправкой и логами
     print(f"[SMTP] Отправка письма: from={login} to={to} subject={subject}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
