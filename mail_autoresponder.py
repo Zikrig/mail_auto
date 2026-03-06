@@ -194,6 +194,7 @@ def save_last_uid(mailbox_name: str, uid: int):
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
     """Отправка письма через Yandex SMTP."""
+    to = strip_html(to).strip() or to  # гарантированно чистим адрес от HTML перед отправкой и логами
     print(f"[SMTP] Отправка письма: from={login} to={to} subject={subject}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
