@@ -56,6 +56,7 @@ def normalize_email(addr: str) -> str:
     # s = re.sub(r"<[^>]+>", "", s)   # убрать <br>, <span> и любые теги
     s = re.sub(r"\s+", "", s)         # убрать все пробелы, переносы, табы
     s = s.replace('br','')
+    print('normalize', str(s))
     return s.strip()
 
 
