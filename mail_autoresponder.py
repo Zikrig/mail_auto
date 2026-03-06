@@ -153,6 +153,14 @@ def _row_matches(row: dict, art: str, nomer_cheka: Optional[str]) -> bool:
     return True
 
 
+def normalize_email(raw: str) -> str:
+    """Очистка email от HTML-хвостов и мусора (теги, переносы)."""
+    s = str(raw).strip()
+    s = re.sub(r"<[^>]*>?", "", s)  # теги: <br>, <br />, сломанные <br
+    s = re.sub(r"[\s<>]+", "", s)   # оставшиеся <, >, пробелы, переносы
+    return s.strip()
+
+
 def get_client_email(parsed: dict) -> str:
     """Email клиента для ответа."""
     raw = (
@@ -161,10 +169,7 @@ def get_client_email(parsed: dict) -> str:
         or parsed.get("email")
         or ""
     )
-    email_str = str(raw).strip()
-    # Иногда из HTML-писем прилетает хвост вида "<br>" и прочие теги
-    email_str = re.sub(r"<[^>]+>", "", email_str)
-    return email_str.strip()
+    return normalize_email(raw)
 
 
 def _get_last_uid_file(mailbox_name: str) -> Path:
@@ -192,6 +197,10 @@ def save_last_uid(mailbox_name: str, uid: int):
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
     """Отправка письма через Yandex SMTP."""
+    to = normalize_email(to)
+    if not to or "@" not in to:
+        print(f"[SMTP] Пропуск отправки: некорректный адрес {to!r}")
+        return
     print(f"[SMTP] Отправка письма: from={login} to={to} subject={subject}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
