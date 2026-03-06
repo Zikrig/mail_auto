@@ -45,6 +45,11 @@ def get_sheet(spreadsheet_id: str):
     return sh.sheet1
 
 
+def strip_html(text: str) -> str:
+    """Удаляет HTML-теги из строки (при получении из писем часто прилетают <br>, <span> и т.п.)."""
+    return re.sub(r"<[^>]+>", "", str(text or "")).strip()
+
+
 def parse_key_value_body(text: str) -> dict:
     """Из тела письма извлекает пары вида «Ключ: значение» (в т.ч. с подчёркиванием)."""
     result = {}
@@ -54,7 +59,7 @@ def parse_key_value_body(text: str) -> dict:
         m = re.match(r"^([A-Za-zА-Яа-яёЁ_\d]+)\s*:\s*(.+)$", line)
         if m:
             key = m.group(1).strip()
-            value = m.group(2).strip()
+            value = strip_html(m.group(2))
             if key and value:
                 result[key] = value
     return result
@@ -153,23 +158,15 @@ def _row_matches(row: dict, art: str, nomer_cheka: Optional[str]) -> bool:
     return True
 
 
-def normalize_email(raw: str) -> str:
-    """Очистка email от HTML-хвостов и мусора (теги, переносы)."""
-    s = str(raw).strip()
-    s = re.sub(r"<[^>]*>?", "", s)  # теги: <br>, <br />, сломанные <br
-    s = re.sub(r"[\s<>]+", "", s)   # оставшиеся <, >, пробелы, переносы
-    return s.strip()
-
-
 def get_client_email(parsed: dict) -> str:
-    """Email клиента для ответа."""
+    """Email клиента для ответа (уже без HTML-тегов, т.к. чистим при разборе и здесь)."""
     raw = (
         parsed.get("ma_email")
         or parsed.get("Email")
         or parsed.get("email")
         or ""
     )
-    return normalize_email(raw)
+    return strip_html(raw)
 
 
 def _get_last_uid_file(mailbox_name: str) -> Path:
@@ -197,10 +194,6 @@ def save_last_uid(mailbox_name: str, uid: int):
 
 def send_email(login: str, password: str, to: str, subject: str, body: str, reply_to_msg_id: Optional[str] = None):
     """Отправка письма через Yandex SMTP."""
-    to = normalize_email(to)
-    if not to or "@" not in to:
-        print(f"[SMTP] Пропуск отправки: некорректный адрес {to!r}")
-        return
     print(f"[SMTP] Отправка письма: from={login} to={to} subject={subject}")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
