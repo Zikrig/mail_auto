@@ -219,7 +219,7 @@ def is_incoming_candidate(msg, config: dict) -> bool:
         print("[IMAP] Пропуск: письмо отправлено с одного из наших ящиков.")
         return False
     # Страховка от авто-петель на ответы.
-    if subj.startswith("re:") and ("регистрация гарантии" in subj or "ваше обращение" in subj):
+    if subj.startswith("re:") and ("регистрация гарантии" in subj or "ваше обращение" in subj or "Содержание заявки" in body):
         print("[IMAP] Пропуск: похоже на ответ на наше авто-письмо.")
         return False
     return True
