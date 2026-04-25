@@ -340,7 +340,11 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, folder_name: str, sheet_w
     Это устойчиво к расхождению часов (ориентируемся только на UID).
     """
     print(f"[IMAP] Проверка ящика {mailbox_name!r}, папка {folder_name!r}")
-    status, _ = imap.select(folder_name)
+    try:
+        status, _ = imap.select(folder_name)
+    except Exception as e:
+        print(f"[IMAP] Ошибка select для папки {folder_name!r} в ящике {mailbox_name!r}: {e}")
+        return
     if status != "OK":
         print(f"[IMAP] Не удалось открыть папку {folder_name!r} в ящике {mailbox_name!r}")
         return
@@ -432,12 +436,19 @@ def get_target_folders(imap) -> list:
             return fallback_folders
         for row in data:
             line = row.decode(errors="replace")
+            # LIST line format: (<flags>) "<delimiter>" "<mailbox>"  (or mailbox without quotes)
+            # Надёжно достаём mailbox из конца строки.
             folder_name = ""
-            if ' "' in line:
-                folder_name = line.rsplit(' "', 1)[-1].rstrip('"')
+            m = re.match(r'.*\)\s+"[^"]*"\s+"(.*)"\s*$', line)
+            if m:
+                folder_name = m.group(1)
             else:
-                parts = line.split()
-                folder_name = parts[-1].strip('"') if parts else ""
+                m2 = re.match(r'.*\)\s+"[^"]*"\s+(.+)\s*$', line)
+                if m2:
+                    folder_name = m2.group(1).strip().strip('"')
+                else:
+                    parts = line.split()
+                    folder_name = parts[-1].strip('"') if parts else ""
             low = folder_name.lower()
             if (
                 "all" in low and "mail" in low
