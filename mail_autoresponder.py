@@ -100,7 +100,7 @@ def detect_type_and_extract(msg, mailbox: str) -> Tuple[Optional[str], dict]:
 
     # По ящику и теме/содержимому
     if mailbox == "warranty":
-        if "Новый заказ" in subject or "Регистрация гарантии" in body or "Информация о покупателе" in body:
+        if "Новый заказ" in subject or "Регистрация гарантии" in body or "Информация о покупателе" in body or "Содержание заявки" in body:
             # Нормализуем ключи под общий формат (в письме регистрации: Артикул, Номер_чека)
             if "Артикул" in parsed and "Номер_чека" not in parsed:
                 pass  # уже есть

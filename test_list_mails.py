@@ -33,7 +33,7 @@ def decode_subject(subj_raw: str) -> str:
     return "".join(parts)
 
 
-def extract_body_preview(msg, max_len: int = 120) -> str:
+def extract_body_preview(msg, max_len: int = 200) -> str:
     body_preview = ""
     if msg.is_multipart():
         for p in msg.walk():
