@@ -204,6 +204,27 @@ def is_message_recent_enough(msg, max_age_days: int = MAX_REPLY_AGE_DAYS) -> boo
         return False
 
 
+def is_incoming_candidate(msg, config: dict) -> bool:
+    """
+    Отсеиваем очевидно исходящие/служебные письма в общей папке «все письма»,
+    чтобы бот не обрабатывал собственные ответы.
+    """
+    from_hdr = (msg.get("From") or "").lower()
+    subj = (msg.get("Subject") or "").lower()
+    own_accounts = [
+        (config.get("care_login") or "").lower(),
+        (config.get("warranty_login") or "").lower(),
+    ]
+    if any(acc and acc in from_hdr for acc in own_accounts):
+        print("[IMAP] Пропуск: письмо отправлено с одного из наших ящиков.")
+        return False
+    # Страховка от авто-петель на ответы.
+    if subj.startswith("re:") and ("регистрация гарантии" in subj or "ваше обращение" in subj):
+        print("[IMAP] Пропуск: похоже на ответ на наше авто-письмо.")
+        return False
+    return True
+
+
 def _sanitize_folder_name(folder_name: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9]+", "_", folder_name or "INBOX").strip("_")
     return safe.lower() or "inbox"
@@ -361,6 +382,8 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, folder_name: str, sheet_w
                 subject = msg.get("Subject", "")
                 print(f"[IMAP] Обработка UID={uid}, Subject={subject!r}")
                 try:
+                    if not is_incoming_candidate(msg, config):
+                        break
                     if not is_message_recent_enough(msg):
                         break
                     letter_type, parsed = detect_type_and_extract(msg, mailbox_name)
@@ -398,14 +421,15 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, folder_name: str, sheet_w
 def get_target_folders(imap) -> list:
     """
     Возвращает папки для обработки:
-    - всегда INBOX
-    - все папки, похожие на spam/junk/спам.
+    - предпочитаем одну общую папку «все письма» (если есть),
+    - иначе fallback: INBOX + spam/junk/спам.
     """
-    folders = ["INBOX"]
+    fallback_folders = ["INBOX"]
+    all_mail_candidates = []
     try:
         status, data = imap.list()
         if status != "OK" or not data:
-            return folders
+            return fallback_folders
         for row in data:
             line = row.decode(errors="replace")
             folder_name = ""
@@ -416,17 +440,26 @@ def get_target_folders(imap) -> list:
                 folder_name = parts[-1].strip('"') if parts else ""
             low = folder_name.lower()
             if (
+                "all" in low and "mail" in low
+            ) or ("все" in low and "пись" in low):
+                all_mail_candidates.append(folder_name)
+            if (
                 "spam" in low
                 or "junk" in low
                 or "спам" in low
             ):
-                folders.append(folder_name)
+                fallback_folders.append(folder_name)
     except Exception as e:
         print(f"[IMAP] Не удалось получить список папок: {e}")
-    # убираем дубли с сохранением порядка
+    # Приоритет — одна общая папка.
+    if all_mail_candidates:
+        print(f"[IMAP] Будет использоваться общая папка: {all_mail_candidates[0]!r}")
+        return [all_mail_candidates[0]]
+    # Иначе fallback-режим.
+    print("[IMAP] Общая папка 'all mail' не найдена, используем INBOX + spam/junk.")
     result = []
     seen = set()
-    for f in folders:
+    for f in fallback_folders:
         if f not in seen:
             seen.add(f)
             result.append(f)
