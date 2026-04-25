@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Вывод последних писем в ящиках care и warranty.
+Вывод последних писем во всех доступных IMAP-папках ящиков care и warranty.
 
-Показывает для каждого ящика до 5 самых «свежих» писем из INBOX:
+Для каждой папки показывает до 5 самых свежих писем:
 - UID
 - Date
 - Subject
@@ -16,10 +16,85 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def decode_subject(subj_raw: str) -> str:
+    from email.header import decode_header
+
+    if not subj_raw:
+        return ""
+    parts = []
+    for s, enc in decode_header(subj_raw):
+        if isinstance(s, bytes):
+            try:
+                parts.append(s.decode(enc or "utf-8", errors="replace"))
+            except Exception:
+                parts.append(s.decode("utf-8", errors="replace"))
+        else:
+            parts.append(str(s))
+    return "".join(parts)
+
+
+def extract_body_preview(msg, max_len: int = 120) -> str:
+    body_preview = ""
+    if msg.is_multipart():
+        for p in msg.walk():
+            if p.get_content_type() == "text/plain":
+                raw = p.get_payload(decode=True)
+                if raw:
+                    body_preview = raw.decode("utf-8", errors="replace")
+                break
+    else:
+        raw = msg.get_payload(decode=True)
+        if raw:
+            body_preview = raw.decode("utf-8", errors="replace")
+    body_preview = body_preview.strip().replace("\r", " ").replace("\n", " ")
+    if len(body_preview) > max_len:
+        body_preview = body_preview[: max_len - 3] + "..."
+    return body_preview
+
+
+def list_last_messages_in_folder(imap, folder_name: str, limit: int = 5):
+    import email
+
+    try:
+        status, _ = imap.select(folder_name)
+    except Exception as e:
+        print(f"\n[Папка] {folder_name!r} — не удалось открыть: {e}")
+        return
+    if status != "OK":
+        print(f"\n[Папка] {folder_name!r} — не удалось открыть")
+        return
+
+    status, data = imap.search(None, "ALL")
+    if status != "OK":
+        print(f"\n[Папка] {folder_name!r} — ошибка поиска")
+        return
+    if not data or not data[0]:
+        return
+
+    uids = data[0].split()
+    last_uids = uids[-limit:]
+    print(f"\n[Папка] {folder_name!r} (показаны последние {len(last_uids)})")
+    for uid in last_uids:
+        uid_s = uid.decode() if isinstance(uid, bytes) else uid
+        status, msg_data = imap.fetch(uid_s, "(RFC822)")
+        if status != "OK":
+            print(f"- UID={uid_s}: ошибка fetch: {status}")
+            continue
+        for part in msg_data:
+            if not isinstance(part, tuple):
+                continue
+            msg = email.message_from_bytes(part[1])
+            date = msg.get("Date", "")
+            subj = decode_subject(msg.get("Subject", ""))
+            body_preview = extract_body_preview(msg)
+            print(f"- UID={uid_s}, Date={date}, Subject={subj!r}")
+            if body_preview:
+                print(f"  Тело: {body_preview}")
+            break
+
+
 def list_last_messages(login: str, password: str, name: str, limit: int = 5):
     import imaplib
-    import email
-    from email.header import decode_header
 
     print(f"\n=== Ящик {name} ({login}) ===")
     try:
@@ -30,57 +105,36 @@ def list_last_messages(login: str, password: str, name: str, limit: int = 5):
         return
 
     try:
-        imap.select("INBOX")
-        status, data = imap.search(None, "ALL")
-        if status != "OK" or not data or not data[0]:
-            print("Писем не найдено.")
+        status, folders_raw = imap.list()
+        if status != "OK" or not folders_raw:
+            print("Не удалось получить список папок.")
             return
-        uids = data[0].split()
-        last_uids = uids[-limit:]
-        for uid in last_uids:
-            uid_s = uid.decode() if isinstance(uid, bytes) else uid
-            status, msg_data = imap.fetch(uid_s, "(RFC822)")
-            if status != "OK":
-                print(f"UID={uid_s}: ошибка fetch: {status}")
-                continue
-            for part in msg_data:
-                if not isinstance(part, tuple):
-                    continue
-                msg = email.message_from_bytes(part[1])
-                date = msg.get("Date", "")
-                subj_raw = msg.get("Subject", "")
-                if subj_raw:
-                    dh = decode_header(subj_raw)
-                    s, enc = dh[0]
-                    if isinstance(s, bytes):
-                        try:
-                            subj = s.decode(enc or "utf-8", errors="replace")
-                        except Exception:
-                            subj = s.decode("utf-8", errors="replace")
-                    else:
-                        subj = s
+
+        folder_names = []
+        for row in folders_raw:
+            line = row.decode(errors="replace")
+            # Формат LIST обычно: (<flags>) "<delimiter>" "<mailbox>"
+            # Берём mailbox как последнюю часть после '"<delimiter>" '.
+            try:
+                parts = line.split('" "', 1)
+                if len(parts) == 2:
+                    folder_name = parts[1].strip()
                 else:
-                    subj = ""
-                # Берём текстовую часть тела
-                body_preview = ""
-                if msg.is_multipart():
-                    for p in msg.walk():
-                        if p.get_content_type() == "text/plain":
-                            raw = p.get_payload(decode=True)
-                            if raw:
-                                body_preview = raw.decode("utf-8", errors="replace")
-                            break
-                else:
-                    raw = msg.get_payload(decode=True)
-                    if raw:
-                        body_preview = raw.decode("utf-8", errors="replace")
-                body_preview = body_preview.strip().replace("\r", " ").replace("\n", " ")
-                if len(body_preview) > 120:
-                    body_preview = body_preview[:117] + "..."
-                print(f"- UID={uid_s}, Date={date}, Subject={subj!r}")
-                if body_preview:
-                    print(f"  Тело: {body_preview}")
-                break
+                    folder_name = line.split()[-1].strip()
+            except Exception:
+                folder_name = line
+            # Снимаем внешние кавычки, если есть.
+            folder_name = folder_name.strip()
+            if folder_name.startswith('"') and folder_name.endswith('"'):
+                folder_name = folder_name[1:-1]
+            if folder_name:
+                folder_names.append(folder_name)
+
+        # Чтобы чаще нужное было выше, но всё равно проход по всем папкам.
+        folder_names = sorted(set(folder_names), key=lambda x: (x.upper() != "INBOX", x.lower()))
+        print(f"Найдено папок: {len(folder_names)}")
+        for folder in folder_names:
+            list_last_messages_in_folder(imap, folder, limit=limit)
     finally:
         try:
             imap.logout()

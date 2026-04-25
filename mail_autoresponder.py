@@ -12,6 +12,7 @@ import smtplib
 import email
 import time
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
@@ -25,12 +26,11 @@ load_dotenv()
 
 # Каталог с черновиками ответов
 DATA_DIR = Path(__file__).resolve().parent / "data"
-# Файлы с последним обработанным UID по ящикам (чтобы не отвечать дважды)
-LAST_UID_CARE_FILE = Path(__file__).resolve().parent / "last_uid_care.txt"
-LAST_UID_WARRANTY_FILE = Path(__file__).resolve().parent / "last_uid_warranty.txt"
+STATE_DIR = Path(__file__).resolve().parent
 
 # Google Sheets scope
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive.readonly"]
+MAX_REPLY_AGE_DAYS = 2
 
 
 def get_sheet(spreadsheet_id: str):
@@ -179,16 +179,47 @@ def get_client_email(parsed: dict) -> str:
     return normalize_email(raw)
 
 
-def _get_last_uid_file(mailbox_name: str) -> Path:
-    return LAST_UID_CARE_FILE if mailbox_name == "care" else LAST_UID_WARRANTY_FILE
+def is_message_recent_enough(msg, max_age_days: int = MAX_REPLY_AGE_DAYS) -> bool:
+    """
+    Отвечаем только на письма не старше max_age_days.
+    Если Date отсутствует/непарсится, письмо пропускаем.
+    """
+    raw_date = msg.get("Date")
+    if not raw_date:
+        print("[IMAP] Пропуск: у письма нет заголовка Date.")
+        return False
+    try:
+        msg_dt = parsedate_to_datetime(raw_date)
+        if msg_dt.tzinfo is None:
+            # Если TZ не указан, считаем письмо локальным временем сервера.
+            msg_dt = msg_dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        now_dt = datetime.now(msg_dt.tzinfo)
+        age = now_dt - msg_dt
+        if age > timedelta(days=max_age_days):
+            print(f"[IMAP] Пропуск: письмо старше {max_age_days} дней (date={msg_dt.isoformat()}).")
+            return False
+        return True
+    except Exception as e:
+        print(f"[IMAP] Пропуск: не удалось распарсить Date ({raw_date!r}): {e}")
+        return False
 
 
-def load_last_uid(mailbox_name: str) -> int:
+def _sanitize_folder_name(folder_name: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", folder_name or "INBOX").strip("_")
+    return safe.lower() or "inbox"
+
+
+def _get_last_uid_file(mailbox_name: str, folder_name: str) -> Path:
+    folder_key = _sanitize_folder_name(folder_name)
+    return STATE_DIR / f"last_uid_{mailbox_name}_{folder_key}.txt"
+
+
+def load_last_uid(mailbox_name: str, folder_name: str) -> int:
     """
     Последний обработанный UID для ящика.
     Если файла нет или сломан — считаем 0 (обрабатываем все письма).
     """
-    path = _get_last_uid_file(mailbox_name)
+    path = _get_last_uid_file(mailbox_name, folder_name)
     if not path.exists():
         return 0
     try:
@@ -197,8 +228,8 @@ def load_last_uid(mailbox_name: str) -> int:
         return 0
 
 
-def save_last_uid(mailbox_name: str, uid: int):
-    path = _get_last_uid_file(mailbox_name)
+def save_last_uid(mailbox_name: str, folder_name: str, uid: int):
+    path = _get_last_uid_file(mailbox_name, folder_name)
     path.write_text(str(uid), encoding="utf-8")
 
 
@@ -282,20 +313,23 @@ def process_registration_mail(msg, parsed: dict, templates: dict, sheet_reg, war
         send_email(warranty_login, warranty_password, admin_email, "[Регистрация] " + ("повторная" if already else "новая") + " [ukataka.ru]", admin_body)
 
 
-def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg, templates: dict, config: dict):
+def fetch_and_process_mailbox(imap, mailbox_name: str, folder_name: str, sheet_warranty, sheet_reg, templates: dict, config: dict):
     """
     Выборка писем из INBOX, UID которых больше последнего обработанного.
     Это устойчиво к расхождению часов (ориентируемся только на UID).
     """
-    print(f"[IMAP] Проверка ящика {mailbox_name!r}")
-    imap.select("INBOX")
+    print(f"[IMAP] Проверка ящика {mailbox_name!r}, папка {folder_name!r}")
+    status, _ = imap.select(folder_name)
+    if status != "OK":
+        print(f"[IMAP] Не удалось открыть папку {folder_name!r} в ящике {mailbox_name!r}")
+        return
     status, data = imap.search(None, "ALL")
     if status != "OK" or not data or not data[0]:
         print(f"[IMAP] В ящике {mailbox_name!r} нет писем.")
         return
 
-    last_uid = load_last_uid(mailbox_name)
-    print(f"[IMAP] Последний обработанный UID для {mailbox_name!r}: {last_uid}")
+    last_uid = load_last_uid(mailbox_name, folder_name)
+    print(f"[IMAP] Последний обработанный UID для {mailbox_name!r}/{folder_name!r}: {last_uid}")
 
     uids_bytes = data[0].split()
     uids_int = []
@@ -327,6 +361,8 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
                 subject = msg.get("Subject", "")
                 print(f"[IMAP] Обработка UID={uid}, Subject={subject!r}")
                 try:
+                    if not is_message_recent_enough(msg):
+                        break
                     letter_type, parsed = detect_type_and_extract(msg, mailbox_name)
                     print(f"[IMAP] Тип письма: {letter_type!r}, parsed_keys={list(parsed.keys())}")
                     if not letter_type:
@@ -355,8 +391,46 @@ def fetch_and_process_mailbox(imap, mailbox_name: str, sheet_warranty, sheet_reg
                 break
     finally:
         if max_processed > last_uid:
-            save_last_uid(mailbox_name, max_processed)
-            print(f"[IMAP] Для ящика {mailbox_name!r} сохранён последний UID: {max_processed}")
+            save_last_uid(mailbox_name, folder_name, max_processed)
+            print(f"[IMAP] Для {mailbox_name!r}/{folder_name!r} сохранён последний UID: {max_processed}")
+
+
+def get_target_folders(imap) -> list:
+    """
+    Возвращает папки для обработки:
+    - всегда INBOX
+    - все папки, похожие на spam/junk/спам.
+    """
+    folders = ["INBOX"]
+    try:
+        status, data = imap.list()
+        if status != "OK" or not data:
+            return folders
+        for row in data:
+            line = row.decode(errors="replace")
+            folder_name = ""
+            if ' "' in line:
+                folder_name = line.rsplit(' "', 1)[-1].rstrip('"')
+            else:
+                parts = line.split()
+                folder_name = parts[-1].strip('"') if parts else ""
+            low = folder_name.lower()
+            if (
+                "spam" in low
+                or "junk" in low
+                or "спам" in low
+            ):
+                folders.append(folder_name)
+    except Exception as e:
+        print(f"[IMAP] Не удалось получить список папок: {e}")
+    # убираем дубли с сохранением порядка
+    result = []
+    seen = set()
+    for f in folders:
+        if f not in seen:
+            seen.add(f)
+            result.append(f)
+    return result
 
 
 def run_iteration():
@@ -394,7 +468,8 @@ def run_iteration():
     try:
         imap_care = imaplib.IMAP4_SSL("imap.yandex.ru")
         imap_care.login(care_login, care_password)
-        fetch_and_process_mailbox(imap_care, "care", sheet_warranty, sheet_reg, templates, config)
+        for folder in get_target_folders(imap_care):
+            fetch_and_process_mailbox(imap_care, "care", folder, sheet_warranty, sheet_reg, templates, config)
         imap_care.logout()
     except Exception as e:
         print("Ошибка при обработке ящика care:", e)
@@ -403,7 +478,8 @@ def run_iteration():
     try:
         imap_warranty = imaplib.IMAP4_SSL("imap.yandex.ru")
         imap_warranty.login(warranty_login, warranty_password)
-        fetch_and_process_mailbox(imap_warranty, "warranty", sheet_warranty, sheet_reg, templates, config)
+        for folder in get_target_folders(imap_warranty):
+            fetch_and_process_mailbox(imap_warranty, "warranty", folder, sheet_warranty, sheet_reg, templates, config)
         imap_warranty.logout()
     except Exception as e:
         print("Ошибка при обработке ящика warranty:", e)
