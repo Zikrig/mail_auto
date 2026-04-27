@@ -113,12 +113,16 @@ def detect_type_and_extract(msg, mailbox: str) -> Tuple[Optional[str], dict]:
     # Если plain-text части нет — используем HTML-часть с конвертацией
     if not body and html_body:
         body = html_to_lines(html_body)
+        print(f"[PARSE] HTML сконвертирован в plain, первые 200 симв.: {body[:200]!r}")
     elif not body:
         raw = msg.get_payload(decode=True)
         if raw:
             body = raw.decode("utf-8", errors="replace")
+    print(f"[PARSE] Итоговый body первые 200 симв.: {body[:200]!r}")
 
     parsed = parse_key_value_body(body)
+    print(f"[PARSE] Parsed keys: {list(parsed.keys())}")
+    print(f"[PARSE] Name={parsed.get('Name')!r}, Артикул={parsed.get('Артикул')!r}, Номер_чека={parsed.get('Номер_чека')!r}, Дата_чека_с_ВБ={parsed.get('Дата_чека_с_ВБ')!r}")
 
     # По ящику и теме/содержимому
     if mailbox == "warranty":
@@ -245,10 +249,14 @@ def get_purchase_date(parsed: dict) -> str:
 
 
 def render_template(template_text: str, context: dict) -> str:
+    print(f"[TPL] Контекст подстановки: {context}")
+    print(f"[TPL] Шаблон (первые 80 симв.): {template_text[:80]!r}")
     try:
-        return template_text.format(**context)
+        result = template_text.format(**context)
+        print(f"[TPL] Результат (первые 80 симв.): {result[:80]!r}")
+        return result
     except Exception as e:
-        print(f"[TPL] Ошибка подстановки шаблона: {e}")
+        print(f"[TPL] ОШИБКА подстановки: {e}")
         return template_text
 
 
