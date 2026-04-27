@@ -75,6 +75,15 @@ def parse_key_value_body(text: str) -> dict:
     return result
 
 
+def html_to_lines(html: str) -> str:
+    """Конвертирует HTML в построчный plain-text: <br> -> \n, теги убираются."""
+    text = re.sub(r"<br\s*/?>", "\n", html, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    # убираем множественные пробелы/пустые строки
+    lines = [ln.strip() for ln in text.splitlines()]
+    return "\n".join(lines)
+
+
 def detect_type_and_extract(msg, mailbox: str) -> Tuple[Optional[str], dict]:
     """
     Определяет тип письма: 'registration' (регистрация) или 'care' (обращение).
@@ -87,14 +96,27 @@ def detect_type_and_extract(msg, mailbox: str) -> Tuple[Optional[str], dict]:
         subject = email.header.decode_header(msg["Subject"])[0][0]
         if isinstance(subject, bytes):
             subject = subject.decode("utf-8", errors="replace")
+
+    html_body = ""
     for part in msg.walk():
-        if part.get_content_type() == "text/plain":
+        ct = part.get_content_type()
+        if ct == "text/plain":
             raw = part.get_payload(decode=True)
             if raw:
                 body = raw.decode("utf-8", errors="replace")
             break
-    if not body and msg.get_payload(decode=True):
-        body = msg.get_payload(decode=True).decode("utf-8", errors="replace")
+        if ct == "text/html" and not html_body:
+            raw = part.get_payload(decode=True)
+            if raw:
+                html_body = raw.decode("utf-8", errors="replace")
+
+    # Если plain-text части нет — используем HTML-часть с конвертацией
+    if not body and html_body:
+        body = html_to_lines(html_body)
+    elif not body:
+        raw = msg.get_payload(decode=True)
+        if raw:
+            body = raw.decode("utf-8", errors="replace")
 
     parsed = parse_key_value_body(body)
 
