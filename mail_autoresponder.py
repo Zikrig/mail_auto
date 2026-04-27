@@ -152,38 +152,51 @@ def find_in_sheet(
     require_check_if_provided: bool = False,
 ) -> bool:
     """Проверяет, есть ли запись в таблице по артикулу и при необходимости по номеру чека."""
+    print(f"[SHEET] Поиск: art={art!r}, nomer_cheka={nomer_cheka!r}, require_check={require_check_if_provided}")
     try:
         rows = sheet.get_all_records()
-    except Exception:
+    except Exception as e:
+        print(f"[SHEET] get_all_records() упал с ошибкой: {e}")
         rows = []
+    print(f"[SHEET] Строк в таблице (get_all_records): {len(rows)}")
     if not rows:
         # может быть заголовок в первой строке, данные со второй
         try:
             all_values = sheet.get_all_values()
+            print(f"[SHEET] get_all_values() вернул {len(all_values)} строк")
             if len(all_values) < 2:
+                print("[SHEET] Таблица пуста — возвращаем False")
                 return False
             headers = [str(h).strip().lower() for h in all_values[0]]
+            print(f"[SHEET] Заголовки: {headers}")
             for r in all_values[1:]:
                 row_dict = dict(zip(headers, (r + [""] * len(headers))[:len(headers)]))
-                if _row_matches(
+                matched = _row_matches(
                     row_dict,
                     art,
                     nomer_cheka,
                     require_check_if_provided=require_check_if_provided,
-                ):
+                )
+                if matched:
+                    print(f"[SHEET] Совпадение найдено в строке: {row_dict}")
                     return True
+            print("[SHEET] Совпадений не найдено — False")
             return False
-        except Exception:
+        except Exception as e:
+            print(f"[SHEET] get_all_values() упал с ошибкой: {e}")
             return False
     for row in rows:
         row_lower = {str(k).strip().lower(): str(v).strip() if v else "" for k, v in row.items()}
-        if _row_matches(
+        matched = _row_matches(
             row_lower,
             art,
             nomer_cheka,
             require_check_if_provided=require_check_if_provided,
-        ):
+        )
+        if matched:
+            print(f"[SHEET] Совпадение найдено в строке: {row_lower}")
             return True
+    print("[SHEET] Совпадений не найдено — False")
     return False
 
 
