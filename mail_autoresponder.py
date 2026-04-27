@@ -145,13 +145,13 @@ def detect_type_and_extract(msg, mailbox: str) -> Tuple[Optional[str], dict]:
     return None, parsed
 
 
-def find_in_sheet(
+def count_in_sheet(
     sheet,
     art: str,
     nomer_cheka: Optional[str] = None,
     require_check_if_provided: bool = False,
-) -> bool:
-    """Проверяет, есть ли запись в таблице по артикулу и при необходимости по номеру чека."""
+) -> int:
+    """Считает сколько строк в таблице совпадают по артикулу и номеру чека."""
     print(f"[SHEET] Поиск: art={art!r}, nomer_cheka={nomer_cheka!r}, require_check={require_check_if_provided}")
     try:
         rows = sheet.get_all_records()
@@ -160,44 +160,40 @@ def find_in_sheet(
         rows = []
     print(f"[SHEET] Строк в таблице (get_all_records): {len(rows)}")
     if not rows:
-        # может быть заголовок в первой строке, данные со второй
         try:
             all_values = sheet.get_all_values()
             print(f"[SHEET] get_all_values() вернул {len(all_values)} строк")
             if len(all_values) < 2:
-                print("[SHEET] Таблица пуста — возвращаем False")
-                return False
+                print("[SHEET] Таблица пуста — возвращаем 0")
+                return 0
             headers = [str(h).strip().lower() for h in all_values[0]]
-            print(f"[SHEET] Заголовки: {headers}")
+            count = 0
             for r in all_values[1:]:
                 row_dict = dict(zip(headers, (r + [""] * len(headers))[:len(headers)]))
-                matched = _row_matches(
-                    row_dict,
-                    art,
-                    nomer_cheka,
-                    require_check_if_provided=require_check_if_provided,
-                )
-                if matched:
-                    print(f"[SHEET] Совпадение найдено в строке: {row_dict}")
-                    return True
-            print("[SHEET] Совпадений не найдено — False")
-            return False
+                if _row_matches(row_dict, art, nomer_cheka, require_check_if_provided=require_check_if_provided):
+                    count += 1
+            print(f"[SHEET] Совпадений найдено: {count}")
+            return count
         except Exception as e:
             print(f"[SHEET] get_all_values() упал с ошибкой: {e}")
-            return False
+            return 0
+    count = 0
     for row in rows:
         row_lower = {str(k).strip().lower(): str(v).strip() if v else "" for k, v in row.items()}
-        matched = _row_matches(
-            row_lower,
-            art,
-            nomer_cheka,
-            require_check_if_provided=require_check_if_provided,
-        )
-        if matched:
-            print(f"[SHEET] Совпадение найдено в строке: {row_lower}")
-            return True
-    print("[SHEET] Совпадений не найдено — False")
-    return False
+        if _row_matches(row_lower, art, nomer_cheka, require_check_if_provided=require_check_if_provided):
+            count += 1
+    print(f"[SHEET] Совпадений найдено: {count}")
+    return count
+
+
+def find_in_sheet(
+    sheet,
+    art: str,
+    nomer_cheka: Optional[str] = None,
+    require_check_if_provided: bool = False,
+) -> bool:
+    """Проверяет, есть ли запись в таблице по артикулу и при необходимости по номеру чека."""
+    return count_in_sheet(sheet, art, nomer_cheka, require_check_if_provided) > 0
 
 
 def _row_matches(
@@ -435,7 +431,12 @@ def process_registration_mail(msg, parsed: dict, templates: dict, sheet_reg, war
     client_name = get_client_name(parsed)
     purchase_date = get_purchase_date(parsed)
     print(f"[REG] Обработка регистрации: name={client_name!r}, email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}, дата={purchase_date!r}")
-    already = find_in_sheet(sheet_reg, art or "", nomer or None, require_check_if_provided=True)
+    # Tilda одновременно пишет строку в таблицу и шлёт письмо.
+    # Первая регистрация → 1 совпадение (только что добавленное Tilda).
+    # Повторная регистрация → 2+ совпадений.
+    match_count = count_in_sheet(sheet_reg, art or "", nomer or None, require_check_if_provided=True)
+    already = match_count >= 2
+    print(f"[REG] Совпадений в таблице: {match_count} → already={already}")
     subject_reply = "Re: Регистрация гарантии [ukataka.ru]"
     body_reply = templates["reg_response_repeat"] if already else templates["reg_response_first"]
     print(f"[REG] Результат поиска в таблице регистрации: already={already}")
