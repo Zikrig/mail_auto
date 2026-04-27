@@ -119,7 +119,12 @@ def detect_type_and_extract(msg, mailbox: str) -> Tuple[Optional[str], dict]:
     return None, parsed
 
 
-def find_in_sheet(sheet, art: str, nomer_cheka: Optional[str] = None) -> bool:
+def find_in_sheet(
+    sheet,
+    art: str,
+    nomer_cheka: Optional[str] = None,
+    require_check_if_provided: bool = False,
+) -> bool:
     """Проверяет, есть ли запись в таблице по артикулу и при необходимости по номеру чека."""
     try:
         rows = sheet.get_all_records()
@@ -134,19 +139,34 @@ def find_in_sheet(sheet, art: str, nomer_cheka: Optional[str] = None) -> bool:
             headers = [str(h).strip().lower() for h in all_values[0]]
             for r in all_values[1:]:
                 row_dict = dict(zip(headers, (r + [""] * len(headers))[:len(headers)]))
-                if _row_matches(row_dict, art, nomer_cheka):
+                if _row_matches(
+                    row_dict,
+                    art,
+                    nomer_cheka,
+                    require_check_if_provided=require_check_if_provided,
+                ):
                     return True
             return False
         except Exception:
             return False
     for row in rows:
         row_lower = {str(k).strip().lower(): str(v).strip() if v else "" for k, v in row.items()}
-        if _row_matches(row_lower, art, nomer_cheka):
+        if _row_matches(
+            row_lower,
+            art,
+            nomer_cheka,
+            require_check_if_provided=require_check_if_provided,
+        ):
             return True
     return False
 
 
-def _row_matches(row: dict, art: str, nomer_cheka: Optional[str]) -> bool:
+def _row_matches(
+    row: dict,
+    art: str,
+    nomer_cheka: Optional[str],
+    require_check_if_provided: bool = False,
+) -> bool:
     art = (art or "").strip()
     nomer_cheka = (nomer_cheka or "").strip()
     art_keys = ["артикул", "артикул_товара"]
@@ -163,8 +183,11 @@ def _row_matches(row: dict, art: str, nomer_cheka: Optional[str]) -> bool:
         return False
     if row_art.strip() != art:
         return False
-    if nomer_cheka and row_num and row_num != nomer_cheka:
-        return False
+    if nomer_cheka:
+        if require_check_if_provided and not row_num:
+            return False
+        if row_num and row_num != nomer_cheka:
+            return False
     return True
 
 
@@ -177,6 +200,34 @@ def get_client_email(parsed: dict) -> str:
         or ""
     )
     return normalize_email(raw)
+
+
+def get_client_name(parsed: dict) -> str:
+    raw = (
+        parsed.get("Name")
+        or parsed.get("name")
+        or parsed.get("ma_name")
+        or "клиент"
+    )
+    return strip_html(str(raw)).strip() or "клиент"
+
+
+def get_purchase_date(parsed: dict) -> str:
+    return (
+        parsed.get("Дата_чека_с_ВБ")
+        or parsed.get("Дата_покупки")
+        or parsed.get("дата_с_чека")
+        or parsed.get("Дата")
+        or "даты в чеке"
+    )
+
+
+def render_template(template_text: str, context: dict) -> str:
+    try:
+        return template_text.format(**context)
+    except Exception as e:
+        print(f"[TPL] Ошибка подстановки шаблона: {e}")
+        return template_text
 
 
 def is_message_recent_enough(msg, max_age_days: int = MAX_REPLY_AGE_DAYS) -> bool:
@@ -219,7 +270,7 @@ def is_incoming_candidate(msg, config: dict) -> bool:
         print("[IMAP] Пропуск: письмо отправлено с одного из наших ящиков.")
         return False
     # Страховка от авто-петель на ответы.
-    if subj.startswith("re:") and ("регистрация гарантии" in subj or "ваше обращение" in subj or "Содержание заявки" in body):
+    if subj.startswith("re:") and ("регистрация гарантии" in subj or "ваше обращение" in subj):
         print("[IMAP] Пропуск: похоже на ответ на наше авто-письмо.")
         return False
     return True
@@ -300,7 +351,9 @@ def process_care_mail(msg, parsed: dict, templates: dict, sheet_warranty, care_l
     if not client_email:
         print("[CARE] Пропуск письма: не найден email клиента в parsed =", parsed)
         return
-    print(f"[CARE] Обработка обращения: email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}")
+    client_name = get_client_name(parsed)
+    purchase_date = get_purchase_date(parsed)
+    print(f"[CARE] Обработка обращения: name={client_name!r}, email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}")
     found = find_in_sheet(sheet_warranty, art or "", nomer or None)
     subject_reply = "Re: Ваше обращение [ukataka.ru]"
     if found:
@@ -310,7 +363,20 @@ def process_care_mail(msg, parsed: dict, templates: dict, sheet_warranty, care_l
         body_reply = templates["care_response_not_found"]
         admin_body = templates["care_admin_not_found"]
     print(f"[CARE] Результат поиска в таблице гарантии: found={found}")
-    send_email(care_login, care_password, client_email, subject_reply, body_reply, msg.get("Message-ID"))
+    context = {
+        "name": client_name,
+        "article": art or "",
+        "check_number": nomer or "",
+        "purchase_date": purchase_date,
+    }
+    send_email(
+        care_login,
+        care_password,
+        client_email,
+        subject_reply,
+        render_template(body_reply, context),
+        msg.get("Message-ID"),
+    )
     if admin_email:
         send_email(care_login, care_password, admin_email, "[Обращение] Данные в гарантии: " + ("найдены" if found else "не найдены"), admin_body)
 
@@ -323,12 +389,27 @@ def process_registration_mail(msg, parsed: dict, templates: dict, sheet_reg, war
     if not client_email:
         print("[REG] Пропуск письма: не найден email клиента в parsed =", parsed)
         return
-    print(f"[REG] Обработка регистрации: email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}")
-    already = find_in_sheet(sheet_reg, art or "", nomer or None)
+    client_name = get_client_name(parsed)
+    purchase_date = get_purchase_date(parsed)
+    print(f"[REG] Обработка регистрации: name={client_name!r}, email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}, дата={purchase_date!r}")
+    already = find_in_sheet(sheet_reg, art or "", nomer or None, require_check_if_provided=True)
     subject_reply = "Re: Регистрация гарантии [ukataka.ru]"
     body_reply = templates["reg_response_repeat"] if already else templates["reg_response_first"]
     print(f"[REG] Результат поиска в таблице регистрации: already={already}")
-    send_email(warranty_login, warranty_password, client_email, subject_reply, body_reply, msg.get("Message-ID"))
+    context = {
+        "name": client_name,
+        "article": art or "",
+        "check_number": nomer or "",
+        "purchase_date": purchase_date,
+    }
+    send_email(
+        warranty_login,
+        warranty_password,
+        client_email,
+        subject_reply,
+        render_template(body_reply, context),
+        msg.get("Message-ID"),
+    )
     if admin_email:
         admin_body = templates["reg_admin_repeat"] if already else templates["reg_admin_first"]
         send_email(warranty_login, warranty_password, admin_email, "[Регистрация] " + ("повторная" if already else "новая") + " [ukataka.ru]", admin_body)

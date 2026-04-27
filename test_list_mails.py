@@ -33,7 +33,7 @@ def decode_subject(subj_raw: str) -> str:
     return "".join(parts)
 
 
-def extract_body_preview(msg, max_len: int = 200) -> str:
+def extract_body_preview(msg, max_len: int = 400) -> str:
     body_preview = ""
     if msg.is_multipart():
         for p in msg.walk():
@@ -93,7 +93,7 @@ def list_last_messages_in_folder(imap, folder_name: str, limit: int = 5):
             break
 
 
-def list_last_messages(login: str, password: str, name: str, limit: int = 5):
+def list_last_messages(login: str, password: str, name: str, limit: int = 2):
     import imaplib
 
     print(f"\n=== Ящик {name} ({login}) ===")
