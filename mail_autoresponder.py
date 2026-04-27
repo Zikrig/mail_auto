@@ -196,6 +196,41 @@ def find_in_sheet(
     return count_in_sheet(sheet, art, nomer_cheka, require_check_if_provided) > 0
 
 
+def count_in_sheet_by_email(sheet, email: str) -> int:
+    """Считает сколько строк в таблице содержат данный email."""
+    email = (email or "").strip().lower()
+    if not email:
+        return 0
+    print(f"[SHEET] Поиск по email: {email!r}")
+    try:
+        rows = sheet.get_all_records()
+    except Exception as e:
+        print(f"[SHEET] get_all_records() упал с ошибкой: {e}")
+        rows = []
+    if not rows:
+        try:
+            all_values = sheet.get_all_values()
+            if len(all_values) < 2:
+                return 0
+            headers = [str(h).strip().lower() for h in all_values[0]]
+            count = sum(
+                1 for r in all_values[1:]
+                for row_dict in [dict(zip(headers, (r + [""] * len(headers))[:len(headers)]))]
+                if any(str(v).strip().lower() == email for k, v in row_dict.items() if "email" in k.lower())
+            )
+            print(f"[SHEET] Совпадений по email: {count}")
+            return count
+        except Exception as e:
+            print(f"[SHEET] get_all_values() упал с ошибкой: {e}")
+            return 0
+    count = sum(
+        1 for row in rows
+        if any(str(v).strip().lower() == email for k, v in row.items() if "email" in str(k).lower())
+    )
+    print(f"[SHEET] Совпадений по email: {count}")
+    return count
+
+
 def _row_matches(
     row: dict,
     art: str,
@@ -432,11 +467,11 @@ def process_registration_mail(msg, parsed: dict, templates: dict, sheet_reg, war
     purchase_date = get_purchase_date(parsed)
     print(f"[REG] Обработка регистрации: name={client_name!r}, email={client_email!r}, артикул={art!r}, номер_чека={nomer!r}, дата={purchase_date!r}")
     # Tilda одновременно пишет строку в таблицу и шлёт письмо.
-    # Первая регистрация → 1 совпадение (только что добавленное Tilda).
-    # Повторная регистрация → 2+ совпадений.
-    match_count = count_in_sheet(sheet_reg, art or "", nomer or None, require_check_if_provided=True)
+    # Ищем по email: 1 совпадение — первая регистрация (только что добавлена Tilda),
+    # 2+ совпадений — повторная регистрация с того же адреса.
+    match_count = count_in_sheet_by_email(sheet_reg, client_email)
     already = match_count >= 2
-    print(f"[REG] Совпадений в таблице: {match_count} → already={already}")
+    print(f"[REG] Совпадений по email {client_email!r}: {match_count} → already={already}")
     subject_reply = "Re: Регистрация гарантии [ukataka.ru]"
     body_reply = templates["reg_response_repeat"] if already else templates["reg_response_first"]
     print(f"[REG] Результат поиска в таблице регистрации: already={already}")
